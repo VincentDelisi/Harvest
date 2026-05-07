@@ -35,6 +35,11 @@ class Config(BaseModel):
             "POLYGON_INDICES_WS_URL", "wss://socket.polygon.io/indices"
         )
     )
+    # Set to true only if your Polygon plan includes Indices (Massive bundle).
+    # When false (default), VIX/VXN/RVX are fetched from Yahoo Finance for free.
+    polygon_has_indices: bool = Field(
+        default_factory=lambda: os.getenv("POLYGON_HAS_INDICES", "false").lower() == "true"
+    )
 
     # Engine
     mode: Mode = Field(default_factory=lambda: os.getenv("ENGINE_MODE", "DRY_RUN"))  # type: ignore

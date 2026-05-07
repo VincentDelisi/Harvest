@@ -16,6 +16,7 @@ import httpx
 import pandas as pd
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from engine.data.yahoo_indices import YahooIndices
 from engine.utils.config import CONFIG
 from engine.utils.logging import get_logger
 
@@ -25,7 +26,7 @@ Timespan = Literal["minute", "hour", "day", "week", "month"]
 
 
 class PolygonREST:
-    def __init__(self) -> None:
+    def __init__(self, yahoo_fallback: YahooIndices | None = None) -> None:
         if not CONFIG.polygon_api_key:
             raise RuntimeError("POLYGON_API_KEY is not set in .env")
         self._client = httpx.Client(
@@ -33,9 +34,15 @@ class PolygonREST:
             params={"apiKey": CONFIG.polygon_api_key},
             timeout=15.0,
         )
+        # Yahoo fallback for indices when Polygon plan doesn't include them.
+        self._yahoo = yahoo_fallback if yahoo_fallback is not None else YahooIndices()
 
     def close(self) -> None:
         self._client.close()
+        try:
+            self._yahoo.close()
+        except Exception:  # pragma: no cover
+            pass
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def aggregates(
@@ -104,10 +111,26 @@ class PolygonREST:
         return df
 
     def latest_index_value(self, index_ticker: str) -> float | None:
-        """Latest VIX/VXN/RVX value via daily aggregates (most recent close)."""
+        """Latest VIX/VXN/RVX value (most recent close).
+
+        Routes to Yahoo Finance when POLYGON_HAS_INDICES is false (default), since
+        Polygon's Stocks plans don't include indices.
+        """
+        if not CONFIG.polygon_has_indices:
+            return self._yahoo.latest_value(index_ticker)
         ticker = index_ticker if index_ticker.startswith("I:") else f"I:{index_ticker}"
         df = self.daily_bars(ticker, lookback_days=10)
         if df.empty:
             log.warning("No data for index %s", ticker)
             return None
         return float(df["close"].iloc[-1])
+
+    def index_daily_bars(self, index_ticker: str, lookback_days: int = 300) -> pd.DataFrame:
+        """Daily bars for an index, used for IVR/IVP bootstrap.
+
+        Routes to Yahoo Finance when POLYGON_HAS_INDICES is false.
+        """
+        if not CONFIG.polygon_has_indices:
+            return self._yahoo.daily_bars(index_ticker, lookback_days=lookback_days)
+        ticker = index_ticker if index_ticker.startswith("I:") else f"I:{index_ticker}"
+        return self.daily_bars(ticker, lookback_days=lookback_days)

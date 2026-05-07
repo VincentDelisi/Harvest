@@ -46,7 +46,7 @@ def main() -> int:
     poly = PolygonREST()
 
     # VIX for global gate
-    vix = poly.latest_index_value("I:VIX")
+    vix = poly.latest_index_value("VIX")
     if vix is not None:
         color = "green" if vix < CONFIG.vix_max else "red"
         console.print(f"VIX: [{color}]{vix:.2f}[/{color}] (gate: < {CONFIG.vix_max})")
@@ -68,7 +68,7 @@ def main() -> int:
 
             # Bootstrap IVR/IVP from VIX proxy
             proxy = CONFIG.vix_proxies[sym]
-            proxy_bars = poly.daily_bars(f"I:{proxy}", lookback_days=400)
+            proxy_bars = poly.index_daily_bars(proxy, lookback_days=400)
             stats_str = "n/a"
             if vix is not None and not proxy_bars.empty:
                 # Use latest proxy value as "today's IV"

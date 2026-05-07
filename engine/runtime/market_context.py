@@ -128,7 +128,7 @@ class MarketContextBuilder:
             # Persist today's reading
             self.iv.log_atm_iv(sym, now_et.date(), today_iv)
             # Build a bootstrap series from the proxy's daily history
-            bootstrap_df = self.polygon.daily_bars(f"I:{proxy_ticker}", lookback_days=300)
+            bootstrap_df = self.polygon.index_daily_bars(proxy_ticker, lookback_days=300)
             bootstrap_series = bootstrap_df["close"] if not bootstrap_df.empty else None
             stats = self.iv.compute_stats(sym, today_iv, bootstrap_series)
             iv_gate_passed = IVEngine.passes_volatility_gate(stats)
