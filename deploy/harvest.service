@@ -1,0 +1,27 @@
+[Unit]
+Description=Harvest credit spread trading engine
+Documentation=https://github.com/VincentDelisi/Harvest
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=harvest
+Group=harvest
+WorkingDirectory=/opt/harvest
+EnvironmentFile=/opt/harvest/.env
+ExecStart=/opt/harvest/.venv/bin/python -m scripts.run_engine
+Restart=on-failure
+RestartSec=15
+StandardOutput=append:/var/log/harvest/engine.log
+StandardError=append:/var/log/harvest/engine.err.log
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/harvest /var/log/harvest
+
+[Install]
+WantedBy=multi-user.target

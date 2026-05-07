@@ -1,8 +1,11 @@
-# Credit Spread Engine
+# Harvest — Credit Spread Engine
 
 Automated daily/short-DTE credit spread trading on SPY, QQQ, IWM via the Public.com API.
 
-**Status:** v1 — under construction. See [`docs/STRATEGY_SPEC.md`](docs/STRATEGY_SPEC.md) for the source-of-truth strategy specification. Code implements the spec; spec is the contract.
+**Status:** v1 — strategy core, broker client, and trading engine complete. 88 tests passing.
+
+- Strategy contract: [`docs/STRATEGY_SPEC.md`](docs/STRATEGY_SPEC.md)
+- Deployment runbook: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)
 
 ## Architecture
 
@@ -26,18 +29,32 @@ Automated daily/short-DTE credit spread trading on SPY, QQQ, IWM via the Public.
 ```
 engine/
 ├── data/           # Polygon REST + WebSocket clients
-├── strategy/       # Indicators, regime, IV rank, scoring, entry/exit rules
-├── broker/         # Public.com API client (orders, positions, chain)
-├── risk/           # Position sizing, kill switch, blackout calendar
-└── utils/          # Logging, config, persistence
+├── strategy/       # Indicators, regime, IV rank/percentile
+├── broker/         # Public.com API client + spread builder
+├── risk/           # Event-blackout calendar
+├── state/          # SQLite trade ledger, kill-switch flag
+├── notify/         # Discord webhook notifier
+├── runtime/        # Entry detector, position monitor, kill switch, main loop
+└── utils/          # Logging, config
 ```
 
-## Setup
+## Quick start (local)
 
 1. Python 3.11+
 2. `cp .env.example .env` and fill in credentials (never commit `.env`)
 3. `pip install -r requirements.txt`
-4. `python -m engine.main --mode DRY_RUN`
+4. `python -m pytest tests/ -v` (all 88 must pass)
+5. `python -m scripts.check_today` (sanity-check Polygon + market state)
+6. `python -m scripts.run_engine --once --dry-run` (one tick of the engine)
+7. `python -m scripts.run_engine --dry-run` (full loop, dry-run)
+
+## Production deploy
+
+See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — runs on a $5/mo Hetzner VPS under `systemd`.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/VincentDelisi/Harvest/main/deploy/install.sh | sudo bash
+```
 
 ## Modes
 
