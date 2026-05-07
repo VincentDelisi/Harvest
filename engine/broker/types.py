@@ -12,9 +12,23 @@ References:
 """
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+
+
+def _coerce_to_str(v: Any) -> Any:
+    """Public's API mixes ints/floats and strings for numeric fields
+    (e.g. volume=0 vs openInterest="123"). Coerce numeric inputs to str so
+    schema validation accepts either form."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return str(v)
+    return v
+
+
+NumericStr = Annotated[Optional[str], BeforeValidator(_coerce_to_str)]
 
 # ───────────────────────── Enums (as Literal for ergonomics) ─────────────────
 
@@ -79,18 +93,18 @@ class OptionChainEntry(BaseModel):
     model_config = ConfigDict(extra="allow")
     instrument: Instrument
     outcome: Optional[str] = None  # "SUCCESS" / error
-    last: Optional[str] = None
-    bid: Optional[str] = None
-    ask: Optional[str] = None
-    volume: Optional[str] = None
-    openInterest: Optional[str] = None
-    impliedVolatility: Optional[str] = None
-    delta: Optional[str] = None
-    gamma: Optional[str] = None
-    theta: Optional[str] = None
-    vega: Optional[str] = None
-    rho: Optional[str] = None
-    strikePrice: Optional[str] = None
+    last: NumericStr = None
+    bid: NumericStr = None
+    ask: NumericStr = None
+    volume: NumericStr = None
+    openInterest: NumericStr = None
+    impliedVolatility: NumericStr = None
+    delta: NumericStr = None
+    gamma: NumericStr = None
+    theta: NumericStr = None
+    vega: NumericStr = None
+    rho: NumericStr = None
+    strikePrice: NumericStr = None
     optionType: Optional[OptionType] = None
     expirationDate: Optional[str] = None
 
