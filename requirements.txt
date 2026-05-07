@@ -9,5 +9,6 @@ pytz>=2024.1
 pandas-market-calendars>=4.4.0
 tenacity>=8.2.0
 rich>=13.7.0
+yfinance>=0.2.40
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
