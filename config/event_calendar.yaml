@@ -1,0 +1,62 @@
+# Event blackout calendar — see STRATEGY_SPEC.md §7
+#
+# Rules:
+#   - No new entries on listed dates.
+#   - No new entries after 14:00 ET on the prior trading session.
+#   - Existing positions: hold; close only via standard exit rules unless ≥50% profit at 13:00 ET prior session.
+#
+# Sources:
+#   FOMC: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm
+#   CPI:  https://www.bls.gov/schedule/news_release/cpi.htm
+#   NFP:  first Friday of each month (verify on BLS)
+#
+# Update at the start of each year and whenever a Powell speech is announced.
+
+fomc_meetings:
+  # 2026 FOMC meetings (verify against Fed calendar)
+  - 2026-01-28
+  - 2026-03-18
+  - 2026-04-29
+  - 2026-06-17
+  - 2026-07-29
+  - 2026-09-16
+  - 2026-11-04
+  - 2026-12-16
+
+cpi_releases:
+  # 2026 CPI release dates (verify against BLS)
+  - 2026-01-14
+  - 2026-02-11
+  - 2026-03-11
+  - 2026-04-15
+  - 2026-05-13
+  - 2026-06-10
+  - 2026-07-15
+  - 2026-08-12
+  - 2026-09-10
+  - 2026-10-14
+  - 2026-11-12
+  - 2026-12-10
+
+nfp_releases:
+  # First Friday of each month, 2026 (verify)
+  - 2026-01-09
+  - 2026-02-06
+  - 2026-03-06
+  - 2026-04-03
+  - 2026-05-01
+  - 2026-06-05
+  - 2026-07-02
+  - 2026-08-07
+  - 2026-09-04
+  - 2026-10-02
+  - 2026-11-06
+  - 2026-12-04
+
+powell_speeches:
+  # Add manually as announced
+  # - 2026-MM-DD
+
+manual_blackouts:
+  # Ad-hoc blackouts (geopolitical events, etc.)
+  # - 2026-MM-DD
