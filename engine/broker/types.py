@@ -32,7 +32,8 @@ AccountType = Literal[
     "TREASURY", "TRADITIONAL_IRA", "ROTH_IRA",
 ]
 BrokerageAccountType = Literal["MARGIN", "CASH"]
-OptionsLevel = Literal["LEVEL_0", "LEVEL_1", "LEVEL_2", "LEVEL_3", "LEVEL_4"]
+# Public returns 'NONE' for accounts that have options disabled (e.g. IRA/cash).
+OptionsLevel = Literal["NONE", "LEVEL_0", "LEVEL_1", "LEVEL_2", "LEVEL_3", "LEVEL_4"]
 
 
 # ───────────────────────── Common building blocks ────────────────────────────

@@ -145,7 +145,10 @@ class PublicClient:
         order = ["LEVEL_0", "LEVEL_1", "LEVEL_2", "LEVEL_3", "LEVEL_4"]
         required_idx = order.index(level)
         for acc in accounts:
-            if acc.optionsLevel and order.index(acc.optionsLevel) >= required_idx:
+            # Skip accounts with options disabled (NONE) or no level set.
+            if not acc.optionsLevel or acc.optionsLevel == "NONE":
+                continue
+            if order.index(acc.optionsLevel) >= required_idx:
                 return
         raise PublicAPIError(
             403,
