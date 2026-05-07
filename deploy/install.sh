@@ -15,7 +15,13 @@ SERVICE_USER="harvest"
 
 echo "==> Installing system dependencies..."
 apt-get update -qq
-apt-get install -y -qq python3.11 python3.11-venv python3-pip git tzdata
+# Use the system's default python3 (3.10 on Ubuntu 22.04, 3.12 on Ubuntu 24.04).
+apt-get install -y -qq python3 python3-venv python3-pip git tzdata
+
+# Detect python3 version for downstream commands.
+PYTHON_BIN="$(command -v python3)"
+PY_VER="$(${PYTHON_BIN} -c 'import sys;print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
+echo "==> Using ${PYTHON_BIN} (Python ${PY_VER})"
 
 echo "==> Setting timezone to America/New_York..."
 timedatectl set-timezone America/New_York || true
@@ -33,7 +39,7 @@ cd "${INSTALL_DIR}"
 chown -R "${SERVICE_USER}":"${SERVICE_USER}" "${INSTALL_DIR}"
 
 echo "==> Setting up Python virtualenv..."
-sudo -u "${SERVICE_USER}" python3.11 -m venv "${INSTALL_DIR}/.venv"
+sudo -u "${SERVICE_USER}" "${PYTHON_BIN}" -m venv "${INSTALL_DIR}/.venv"
 sudo -u "${SERVICE_USER}" "${INSTALL_DIR}/.venv/bin/pip" install --quiet --upgrade pip
 sudo -u "${SERVICE_USER}" "${INSTALL_DIR}/.venv/bin/pip" install --quiet -r requirements.txt
 
