@@ -8,7 +8,7 @@ venv/
 .mypy_cache/
 .ruff_cache/
 *.log
-data/
+/data/
 *.db
 *.db-journal
 .DS_Store
