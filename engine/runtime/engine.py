@@ -30,6 +30,7 @@ import pytz
 
 from engine.broker.public_client import PublicAPIError, PublicClient
 from engine.data.polygon_rest import PolygonREST
+from engine.notify.diagnostics import DiagnosticsReporter, build_row
 from engine.notify.discord import Notifier, build_notifier
 from engine.risk.event_calendar import EventCalendar
 from engine.runtime.entry_detector import EntryDetector
@@ -80,6 +81,13 @@ class Engine:
         self.entry = EntryDetector(self.public, self.state, self.notify)
         self.monitor = PositionMonitor(self.public, self.state, self.notify)
         self.kill = KillSwitch(self.state, self.notify)
+        self.diagnostics = DiagnosticsReporter()
+
+        # Per-day diagnostics tallies (reset by morning routine).
+        self._diag_eval_count = 0
+        self._diag_triggered_count = 0
+        self._diag_placed_count = 0
+        self._diag_gate_passes = {"regime": 0, "macro": 0, "iv": 0}
 
         # Daily cache
         self._market_ctx: Optional[MarketContext] = None
@@ -174,6 +182,11 @@ class Engine:
 
     def _morning_routine(self, now_et: datetime) -> None:
         log.info("Morning routine for %s", now_et.date().isoformat())
+        # Reset per-day diagnostics counters.
+        self._diag_eval_count = 0
+        self._diag_triggered_count = 0
+        self._diag_placed_count = 0
+        self._diag_gate_passes = {"regime": 0, "macro": 0, "iv": 0}
         try:
             # Snapshot equity for the day's drawdown calc
             equity = self._snapshot_equity()
@@ -200,6 +213,7 @@ class Engine:
         if self._account_equity is None:
             log.warning("No account equity — skipping entry routine")
             return
+        diag_rows = []
         for sym in CONFIG.underlyings:
             try:
                 bars = self.polygon.intraday_5m(sym, lookback_minutes=180)
@@ -214,9 +228,34 @@ class Engine:
                     log.info("Entry placed for %s — %s", sym, decision.placed_order_id)
                 elif decision.triggered and decision.blocked_reason:
                     log.info("Entry triggered but blocked for %s: %s", sym, decision.blocked_reason)
+
+                # Tally diagnostics state.
+                self._diag_eval_count += 1
+                if decision.triggered:
+                    self._diag_triggered_count += 1
+                if decision.placed_order_id:
+                    self._diag_placed_count += 1
+                if self._market_ctx is not None:
+                    if not self._market_ctx.blackout_active and self._market_ctx.vix_gate_passed:
+                        self._diag_gate_passes["macro"] += 1
+                    ctx = self._market_ctx.underlyings.get(sym)
+                    if ctx is not None and ctx.regime.regime.value != "MIXED":
+                        self._diag_gate_passes["regime"] += 1
+                    if ctx is not None and ctx.iv_gate_passed:
+                        self._diag_gate_passes["iv"] += 1
+                if self._market_ctx is not None:
+                    diag_rows.append(build_row(sym, self._market_ctx, decision))
             except Exception as exc:  # noqa: BLE001
                 log.exception("Entry check %s failed: %s", sym, exc)
                 self.kill.record_api_error(now_et)
+
+        # Emit diagnostics (rate-limited inside the reporter; safe to call every tick).
+        if diag_rows:
+            try:
+                self.diagnostics.maybe_post_snapshot(now_et, diag_rows)
+                self.diagnostics.maybe_post_near_misses(now_et, diag_rows)
+            except Exception as exc:  # noqa: BLE001 — diagnostics never block trading
+                log.warning("Diagnostics post failed: %s", exc)
 
     def _eod_summary(self, now_et: datetime) -> None:
         try:
@@ -237,6 +276,17 @@ class Engine:
                 f"Equity: ${self._starting_equity or 0:,.2f} → ${ending_equity:,.2f}",
             )
             self.state.set_meta("last_eod_summary_date", now_et.date().isoformat())
+            # Diagnostic EOD on the secondary channel.
+            try:
+                self.diagnostics.post_eod_summary(
+                    now_et,
+                    self._diag_gate_passes,
+                    self._diag_triggered_count,
+                    self._diag_placed_count,
+                    self._diag_eval_count,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Diagnostics EOD post failed: %s", exc)
         except Exception as exc:  # noqa: BLE001
             log.exception("EOD summary failed: %s", exc)
 

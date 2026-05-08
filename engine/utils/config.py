@@ -49,6 +49,19 @@ class Config(BaseModel):
 
     # Alerts
     discord_webhook_url: str = Field(default_factory=lambda: os.getenv("DISCORD_WEBHOOK_URL", ""))
+    # Optional second channel for verbose gate-evaluation telemetry.
+    # Leave unset to silence diagnostic pings entirely.
+    discord_diagnostics_webhook_url: str = Field(
+        default_factory=lambda: os.getenv("DISCORD_WEBHOOK_DIAGNOSTICS_URL", "")
+    )
+    # How often (seconds) to post a gate-eval snapshot during the entry window.
+    diagnostics_snapshot_interval_s: int = Field(
+        default_factory=lambda: int(os.getenv("DIAGNOSTICS_SNAPSHOT_INTERVAL_S", "300"))
+    )
+    # RSI distance from threshold that counts as a "near miss" (10 → 15 = miss by 5).
+    diagnostics_near_miss_rsi_band: float = Field(
+        default_factory=lambda: float(os.getenv("DIAGNOSTICS_NEAR_MISS_RSI_BAND", "5.0"))
+    )
 
     # Strategy constants (from STRATEGY_SPEC.md — do not change here without updating spec)
     underlyings: tuple[str, ...] = ("SPY", "QQQ", "IWM")
