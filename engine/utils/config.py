@@ -68,7 +68,14 @@ class Config(BaseModel):
     vix_proxies: dict[str, str] = {"SPY": "VIX", "QQQ": "VXN", "IWM": "RVX"}
     delta_min: float = 0.16
     delta_max: float = 0.25
+    # Default (legacy) width — used by tests and backwards-compatible callers.
     width: float = 1.0
+    # Adaptive width fallback: try $1 first; if no candidate passes all gates,
+    # try $2, then $3, then $5. The first width that produces a valid candidate
+    # wins. Keeps high credit/width on tight spreads when premium is rich, but
+    # gracefully widens in low-vol regimes where $1 spreads can't clear the
+    # credit/width floor.
+    widths_to_try: tuple[float, ...] = (1.0, 2.0, 3.0, 5.0)
     min_credit_to_width: float = 0.33
     max_bid_ask_pct: float = 0.10           # short-leg gate (% of mid)
     max_long_leg_abs_spread: float = 0.05   # long-leg gate (absolute $)

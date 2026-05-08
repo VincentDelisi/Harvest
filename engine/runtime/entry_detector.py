@@ -22,7 +22,11 @@ import pandas as pd
 import pytz
 
 from engine.broker.public_client import PublicAPIError, PublicClient
-from engine.broker.spread_builder import SpreadCandidate, build_credit_spread
+from engine.broker.spread_builder import (
+    SpreadBuilderReport,
+    SpreadCandidate,
+    build_credit_spread_adaptive,
+)
 from engine.notify.discord import Notifier
 from engine.runtime.market_context import MarketContext
 from engine.runtime.sizing import (
@@ -49,6 +53,9 @@ class EntryDecision:
     blocked_reason: Optional[str]
     candidate: Optional[SpreadCandidate]
     placed_order_id: Optional[str]
+    # Per-width spread-builder breakdown when RSI triggered. None when the
+    # builder wasn't reached (e.g. regime/IV/RSI gate blocked first).
+    builder_report: Optional[SpreadBuilderReport] = None
 
 
 class EntryDetector:
@@ -188,9 +195,14 @@ class EntryDetector:
             log.error("Chain fetch failed for %s %s: %s", symbol, exp, exc)
             return EntryDecision(symbol, direction, True, rsi_v, f"chain fetch failed: {exc}", None, None)
 
-        cand = build_credit_spread(chain, symbol, direction, exp, width=CONFIG.width)
+        report = build_credit_spread_adaptive(chain, symbol, direction, exp)
+        cand = report.candidate
         if cand is None:
-            return EntryDecision(symbol, direction, True, rsi_v, "no spread passed gates", None, None)
+            return EntryDecision(
+                symbol, direction, True, rsi_v,
+                "no spread passed gates", None, None,
+                builder_report=report,
+            )
 
         # 6. Sizing
         qty = size_position(
@@ -201,13 +213,19 @@ class EntryDetector:
             filled_trade_count=self.state.filled_trade_count(),
         )
         if qty <= 0:
-            return EntryDecision(symbol, direction, True, rsi_v, "sizing returned 0 contracts", cand, None)
+            return EntryDecision(
+                symbol, direction, True, rsi_v, "sizing returned 0 contracts",
+                cand, None, builder_report=report,
+            )
 
         # 7. Concurrency / aggregate-loss cap
         proposed_max_loss = per_spread_max_loss(cand.width, cand.net_credit) * qty
         ok, why = self._can_take_new_position(symbol, proposed_max_loss, account_equity)
         if not ok:
-            return EntryDecision(symbol, direction, True, rsi_v, why, cand, None)
+            return EntryDecision(
+                symbol, direction, True, rsi_v, why, cand, None,
+                builder_report=report,
+            )
 
         # 8. Submit (preflight is enforced inside place_multi_leg_order)
         order_id = str(uuid.uuid4())
@@ -225,7 +243,10 @@ class EntryDetector:
                 f"Order REJECTED — {symbol} {direction}",
                 f"Spread: {cand.short_symbol} / {cand.long_symbol}\nError: {exc}",
             )
-            return EntryDecision(symbol, direction, True, rsi_v, f"order failed: {exc}", cand, None)
+            return EntryDecision(
+                symbol, direction, True, rsi_v, f"order failed: {exc}",
+                cand, None, builder_report=report,
+            )
 
         # 9. Persist as PENDING
         trade = TradeRecord(
@@ -265,4 +286,7 @@ class EntryDetector:
             ],
         )
 
-        return EntryDecision(symbol, direction, True, rsi_v, None, cand, resp.orderId)
+        return EntryDecision(
+            symbol, direction, True, rsi_v, None, cand, resp.orderId,
+            builder_report=report,
+        )

@@ -28,6 +28,7 @@ from engine.notify.discord import (
     NullNotifier,
     Notifier,
 )
+from engine.broker.spread_builder import SpreadBuilderReport
 from engine.runtime.entry_detector import EntryDecision
 from engine.runtime.market_context import MarketContext
 from engine.utils.config import CONFIG
@@ -50,6 +51,8 @@ class GateEvalRow:
     triggered: bool
     blocked_reason: Optional[str]
     placed: bool
+    # Spread-builder result when RSI triggered but no order was placed yet.
+    builder_report: Optional[SpreadBuilderReport] = None
 
     def status_str(self) -> str:
         if self.placed:
@@ -115,6 +118,7 @@ def build_row(symbol: str, market: MarketContext, decision: EntryDecision) -> Ga
         triggered=decision.triggered,
         blocked_reason=decision.blocked_reason,
         placed=bool(decision.placed_order_id),
+        builder_report=decision.builder_report,
     )
 
 
@@ -152,6 +156,8 @@ class DiagnosticsReporter:
         self._last_snapshot_at: Optional[datetime] = None
         # Per (symbol, date) — only ping near-miss once per day per symbol.
         self._near_miss_pinged_today: set[tuple[str, str]] = set()
+        # Same rate-limit for spread-builder failure pings.
+        self._spread_fail_pinged_today: set[tuple[str, str]] = set()
 
     # ─────────── snapshot ───────────────────────────────────────────────
 
@@ -223,6 +229,67 @@ class DiagnosticsReporter:
             f"Regime: {row.regime}\n"
             f"*No trade — RSI just outside threshold*"
         )
+        return self.notify.send(title, body, color=COLOR_YELLOW)
+
+    # ─────────── spread-builder failure pings ────────────────────────
+
+    def maybe_post_spread_builder_failures(
+        self, now_et: datetime, rows: list[GateEvalRow]
+    ) -> int:
+        """Ping the diagnostics channel when a symbol triggered RSI but no
+        spread passed at any width. Shows the per-width breakdown so it's
+        clear which gate is the bottleneck.
+
+        Rate-limited to once per (symbol, day) so the channel doesn't get
+        spammed every tick during a sustained RSI excursion.
+
+        Returns the number of pings sent.
+        """
+        sent = 0
+        day_key = now_et.strftime("%Y-%m-%d")
+        for r in rows:
+            if not r.triggered or r.placed:
+                continue
+            report = r.builder_report
+            if report is None or report.candidate is not None:
+                continue
+            if not report.per_width:
+                continue
+            key = (r.symbol, day_key)
+            if key in self._spread_fail_pinged_today:
+                continue
+            self._spread_fail_pinged_today.add(key)
+            sent += int(self._post_spread_builder_failure(now_et, r, report))
+        return sent
+
+    def _post_spread_builder_failure(
+        self,
+        now_et: datetime,
+        row: GateEvalRow,
+        report: SpreadBuilderReport,
+    ) -> bool:
+        title = f"⚠ No spread at any width — {row.symbol} {row.direction or ''}".strip()
+        lines = [
+            f"RSI(2) triggered (RSI={row.rsi_value:.2f} → "
+            f"{'<' if row.direction == 'PUT' else '>'} "
+            f"{row.rsi_threshold:.0f}) but no candidate passed at any width.",
+            "",
+            "```",
+            f"{'Width':<7} {'Examined':<9} {'ShortIlq':<9} {'NoLong':<8} {'LongIlq':<8} {'CredLow':<8} {'OK'}",
+            "─" * 60,
+        ]
+        for c in report.per_width:
+            lines.append(
+                f"${c.width:<6.2f} {c.examined:<9} {c.short_illiquid:<9} "
+                f"{c.no_long_strike:<8} {c.long_illiquid:<8} "
+                f"{c.credit_too_thin:<8} {c.accepted}"
+            )
+        lines.append("```")
+        lines.append(
+            "*Examined = short-strike candidates inside the delta band. "
+            "Counters show the first gate each candidate failed.*"
+        )
+        body = "\n".join(lines)
         return self.notify.send(title, body, color=COLOR_YELLOW)
 
     # ─────────── EOD ────────────────────────────────────────────────────

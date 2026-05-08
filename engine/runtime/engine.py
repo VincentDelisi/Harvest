@@ -254,6 +254,7 @@ class Engine:
             try:
                 self.diagnostics.maybe_post_snapshot(now_et, diag_rows)
                 self.diagnostics.maybe_post_near_misses(now_et, diag_rows)
+                self.diagnostics.maybe_post_spread_builder_failures(now_et, diag_rows)
             except Exception as exc:  # noqa: BLE001 — diagnostics never block trading
                 log.warning("Diagnostics post failed: %s", exc)
 

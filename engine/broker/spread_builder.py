@@ -46,6 +46,32 @@ def _bid_ask_pct(bid: float | None, ask: float | None) -> float | None:
 
 
 @dataclass
+class GateFailureCounts:
+    """Per-width tally of why short-strike candidates failed each filter.
+
+    Used by diagnostics to show which gate is the actual bottleneck on a
+    given attempt. Counts each candidate at most once — the first failed
+    filter is what's recorded.
+    """
+    width: float
+    examined: int = 0           # short-strike candidates in [delta_min, delta_max]
+    short_illiquid: int = 0     # OI<min, bid/ask<=0, or bid-ask>10%
+    no_long_strike: int = 0     # paired strike not found in chain
+    long_illiquid: int = 0      # paired strike failed liquidity
+    credit_too_thin: int = 0    # credit/width below 33%
+    accepted: int = 0           # all gates passed
+
+
+@dataclass
+class SpreadBuilderReport:
+    """Outcome of `build_credit_spread_adaptive` — the selected candidate
+    (if any) plus a per-width failure tally for diagnostics."""
+    candidate: Optional["SpreadCandidate"]
+    selected_width: Optional[float]
+    per_width: list[GateFailureCounts]
+
+
+@dataclass
 class SpreadCandidate:
     """A fully-vetted credit spread ready to send to preflight."""
     underlying: str
@@ -110,25 +136,28 @@ def _short_delta_ok(delta: float, direction: str) -> bool:
     return CONFIG.delta_min <= abs(delta) <= CONFIG.delta_max
 
 
-def build_credit_spread(
+def _build_for_width(
     chain: OptionChainResponse,
     underlying: str,
-    direction: str,  # "PUT" or "CALL"
+    direction: str,
     expiration: str,
-    width: float = 1.0,
-) -> Optional[SpreadCandidate]:
-    """Find the best credit spread that satisfies all gates.
+    width: float,
+) -> tuple[Optional[SpreadCandidate], GateFailureCounts]:
+    """Inner builder for a single width. Returns the best candidate (if any)
+    plus a tally of where short-strike candidates dropped out.
 
-    "Best" = highest credit/width among the deltas in the [0.16, 0.25] band
-    that also passes liquidity gates.
+    Each delta-band candidate is counted at most once — at the *first* gate
+    it failed.
     """
+    counts = GateFailureCounts(width=width)
+
     if direction not in ("PUT", "CALL"):
         raise ValueError(f"direction must be PUT or CALL, got {direction}")
 
     entries = chain.puts if direction == "PUT" else chain.calls
     if not entries:
         log.info("No %s entries in chain for %s %s", direction, underlying, expiration)
-        return None
+        return None, counts
 
     # Index entries by strike for fast pairing
     by_strike: dict[float, OptionChainEntry] = {}
@@ -145,7 +174,7 @@ def build_credit_spread(
         by_strike[strike] = e
 
     if not by_strike:
-        return None
+        return None, counts
 
     # Find the short-strike candidate(s): delta in band, liquid
     candidates: list[SpreadCandidate] = []
@@ -155,7 +184,12 @@ def build_credit_spread(
             continue
         if not _short_delta_ok(delta, direction):
             continue
+
+        # Inside delta band — this is a real candidate to evaluate.
+        counts.examined += 1
+
         if not _ok_short_liquidity(short_entry):
+            counts.short_illiquid += 1
             continue
 
         # Long leg: lower strike for puts, higher strike for calls (further OTM)
@@ -165,8 +199,10 @@ def build_credit_spread(
             long_strike = round(short_strike + width, 2)
         long_entry = by_strike.get(long_strike)
         if long_entry is None:
+            counts.no_long_strike += 1
             continue
         if not _ok_long_liquidity(long_entry):
+            counts.long_illiquid += 1
             continue
 
         # Net credit at mid: short premium - long premium (both are positive)
@@ -178,11 +214,14 @@ def build_credit_spread(
         l_mid = (l_bid + l_ask) / 2.0
         net_credit = round(s_mid - l_mid, 2)
         if net_credit <= 0:
+            counts.credit_too_thin += 1
             continue
         ratio = net_credit / width
         if ratio < CONFIG.min_credit_to_width:
+            counts.credit_too_thin += 1
             continue
 
+        counts.accepted += 1
         legs = [
             OrderLeg(
                 instrument=Instrument(symbol=short_entry.instrument.symbol, type="OPTION"),
@@ -220,19 +259,87 @@ def build_credit_spread(
         )
 
     if not candidates:
-        log.info("No %s spread candidates for %s exp=%s passed all gates",
-                 direction, underlying, expiration)
-        return None
+        return None, counts
 
     # Pick highest credit/width. Tie-break: short delta closest to 0.20.
     candidates.sort(key=lambda c: (-c.credit_to_width, abs(c.short_delta - 0.20)))
-    best = candidates[0]
+    return candidates[0], counts
+
+
+def build_credit_spread(
+    chain: OptionChainResponse,
+    underlying: str,
+    direction: str,  # "PUT" or "CALL"
+    expiration: str,
+    width: float = 1.0,
+) -> Optional[SpreadCandidate]:
+    """Find the best credit spread that satisfies all gates at a single width.
+
+    "Best" = highest credit/width among the deltas in the [0.16, 0.25] band
+    that also passes liquidity gates.
+
+    Backward-compatible single-width API. For the adaptive $1→$2→$3→$5
+    fallback, use `build_credit_spread_adaptive` instead.
+    """
+    best, _counts = _build_for_width(chain, underlying, direction, expiration, width)
+    if best is None:
+        log.info("No %s spread candidates for %s exp=%s passed all gates (width=%.2f)",
+                 direction, underlying, expiration, width)
+        return None
     log.info(
         "Selected %s spread: %s/%s short_delta=%.2f credit=%.2f credit/width=%.0f%%",
         direction, best.short_symbol, best.long_symbol,
         best.short_delta, best.net_credit, best.credit_to_width * 100,
     )
     return best
+
+
+def build_credit_spread_adaptive(
+    chain: OptionChainResponse,
+    underlying: str,
+    direction: str,
+    expiration: str,
+    widths_to_try: Optional[tuple[float, ...]] = None,
+) -> SpreadBuilderReport:
+    """Try widths in order until one yields a passing candidate.
+
+    Strategy: $1 spreads have the best risk/reward when premium is rich, so
+    we try the tightest width first and fall back to wider spreads only when
+    the credit/width floor can't be cleared. Delta band stays the same at all
+    widths, so directional risk is unchanged — wider spreads only increase
+    capital at risk per contract while preserving win rate.
+
+    Returns a `SpreadBuilderReport` with the selected candidate (or None if
+    nothing passed at any width) plus a per-width gate-failure breakdown for
+    diagnostics.
+    """
+    widths = widths_to_try if widths_to_try is not None else CONFIG.widths_to_try
+    if not widths:
+        return SpreadBuilderReport(candidate=None, selected_width=None, per_width=[])
+
+    per_width: list[GateFailureCounts] = []
+    for w in widths:
+        cand, counts = _build_for_width(chain, underlying, direction, expiration, w)
+        per_width.append(counts)
+        if cand is not None:
+            log.info(
+                "Adaptive: selected %s spread at width=$%.2f — %s/%s "
+                "short_delta=%.2f credit=%.2f credit/width=%.0f%% "
+                "(tried widths up to here: %s)",
+                direction, w, cand.short_symbol, cand.long_symbol,
+                cand.short_delta, cand.net_credit, cand.credit_to_width * 100,
+                [pw.width for pw in per_width],
+            )
+            return SpreadBuilderReport(
+                candidate=cand, selected_width=w, per_width=per_width
+            )
+
+    log.info(
+        "Adaptive: no %s spread passed at any width for %s exp=%s. Tally: %s",
+        direction, underlying, expiration,
+        [(c.width, c.examined, c.accepted) for c in per_width],
+    )
+    return SpreadBuilderReport(candidate=None, selected_width=None, per_width=per_width)
 
 
 def closing_legs(short_symbol: str, long_symbol: str) -> list[OrderLeg]:
