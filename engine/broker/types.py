@@ -63,14 +63,6 @@ class Expiration(BaseModel):
     expirationTime: Optional[str] = None  # ISO-8601 if GTC
 
 
-class OptionDetails(BaseModel):
-    model_config = ConfigDict(extra="allow")
-    baseSymbol: str
-    type: OptionType
-    strikePrice: str  # Public returns these as strings
-    optionExpireDate: str  # YYYY-MM-DD
-
-
 # ───────────────────────── Account ───────────────────────────────────────────
 
 class Account(BaseModel):
@@ -87,9 +79,31 @@ class AccountListResponse(BaseModel):
 
 # ───────────────────────── Option chain ──────────────────────────────────────
 
+class OptionGreeks(BaseModel):
+    """Greeks live inside `optionDetails.greeks` (not top-level) per Public's
+    actual API response."""
+    model_config = ConfigDict(extra="allow")
+    delta: NumericStr = None
+    gamma: NumericStr = None
+    theta: NumericStr = None
+    vega: NumericStr = None
+    rho: NumericStr = None
+    impliedVolatility: NumericStr = None
+
+
+class OptionDetails(BaseModel):
+    """Nested object that holds the actual greeks, strike, midPrice etc."""
+    model_config = ConfigDict(extra="allow")
+    greeks: Optional[OptionGreeks] = None
+    strikePrice: NumericStr = None
+    midPrice: NumericStr = None
+    optionType: Optional[OptionType] = None
+    expirationDate: Optional[str] = None
+
+
 class OptionChainEntry(BaseModel):
-    """A single contract in the chain. Greeks are present per Public's
-    changelog but not documented in the schema page yet — treat as optional."""
+    """A single contract in the chain. Greeks/IV/strike live in nested
+    `optionDetails`; we expose flat properties that read from there."""
     model_config = ConfigDict(extra="allow")
     instrument: Instrument
     outcome: Optional[str] = None  # "SUCCESS" / error
@@ -98,15 +112,77 @@ class OptionChainEntry(BaseModel):
     ask: NumericStr = None
     volume: NumericStr = None
     openInterest: NumericStr = None
-    impliedVolatility: NumericStr = None
-    delta: NumericStr = None
-    gamma: NumericStr = None
-    theta: NumericStr = None
-    vega: NumericStr = None
-    rho: NumericStr = None
-    strikePrice: NumericStr = None
-    optionType: Optional[OptionType] = None
-    expirationDate: Optional[str] = None
+    optionDetails: Optional[OptionDetails] = None
+    # Top-level fallbacks (rarely populated, kept for backward compatibility).
+    top_impliedVolatility: NumericStr = Field(default=None, alias="impliedVolatility")
+    top_delta: NumericStr = Field(default=None, alias="delta")
+    top_gamma: NumericStr = Field(default=None, alias="gamma")
+    top_theta: NumericStr = Field(default=None, alias="theta")
+    top_vega: NumericStr = Field(default=None, alias="vega")
+    top_rho: NumericStr = Field(default=None, alias="rho")
+    top_strikePrice: NumericStr = Field(default=None, alias="strikePrice")
+    top_optionType: Optional[OptionType] = Field(default=None, alias="optionType")
+    top_expirationDate: Optional[str] = Field(default=None, alias="expirationDate")
+
+    @property
+    def impliedVolatility(self) -> Optional[str]:
+        if self.optionDetails and self.optionDetails.greeks and self.optionDetails.greeks.impliedVolatility is not None:
+            return self.optionDetails.greeks.impliedVolatility
+        return self.top_impliedVolatility
+
+    @property
+    def delta(self) -> Optional[str]:
+        if self.optionDetails and self.optionDetails.greeks and self.optionDetails.greeks.delta is not None:
+            return self.optionDetails.greeks.delta
+        return self.top_delta
+
+    @property
+    def gamma(self) -> Optional[str]:
+        if self.optionDetails and self.optionDetails.greeks and self.optionDetails.greeks.gamma is not None:
+            return self.optionDetails.greeks.gamma
+        return self.top_gamma
+
+    @property
+    def theta(self) -> Optional[str]:
+        if self.optionDetails and self.optionDetails.greeks and self.optionDetails.greeks.theta is not None:
+            return self.optionDetails.greeks.theta
+        return self.top_theta
+
+    @property
+    def vega(self) -> Optional[str]:
+        if self.optionDetails and self.optionDetails.greeks and self.optionDetails.greeks.vega is not None:
+            return self.optionDetails.greeks.vega
+        return self.top_vega
+
+    @property
+    def rho(self) -> Optional[str]:
+        if self.optionDetails and self.optionDetails.greeks and self.optionDetails.greeks.rho is not None:
+            return self.optionDetails.greeks.rho
+        return self.top_rho
+
+    @property
+    def strikePrice(self) -> Optional[str]:
+        if self.optionDetails and self.optionDetails.strikePrice is not None:
+            return self.optionDetails.strikePrice
+        return self.top_strikePrice
+
+    @property
+    def midPrice(self) -> Optional[str]:
+        if self.optionDetails and self.optionDetails.midPrice is not None:
+            return self.optionDetails.midPrice
+        return None
+
+    @property
+    def optionType(self) -> Optional[OptionType]:
+        if self.optionDetails and self.optionDetails.optionType is not None:
+            return self.optionDetails.optionType
+        return self.top_optionType
+
+    @property
+    def expirationDate(self) -> Optional[str]:
+        if self.optionDetails and self.optionDetails.expirationDate is not None:
+            return self.optionDetails.expirationDate
+        return self.top_expirationDate
 
 
 class OptionChainRequest(BaseModel):
