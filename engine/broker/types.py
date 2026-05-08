@@ -217,11 +217,12 @@ class QuoteRequest(BaseModel):
 class Quote(BaseModel):
     model_config = ConfigDict(extra="allow")
     instrument: Instrument
-    last: Optional[str] = None
-    bid: Optional[str] = None
-    ask: Optional[str] = None
-    bidSize: Optional[str] = None
-    askSize: Optional[str] = None
+    # Public mixes int/float/str across these fields — coerce everything to str.
+    last: NumericStr = None
+    bid: NumericStr = None
+    ask: NumericStr = None
+    bidSize: NumericStr = None
+    askSize: NumericStr = None
 
 
 class QuoteResponse(BaseModel):
