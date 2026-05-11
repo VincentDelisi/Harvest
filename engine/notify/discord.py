@@ -8,7 +8,9 @@ block trading logic. Errors are logged and swallowed.
 """
 from __future__ import annotations
 
-from typing import Any, Optional, Protocol
+import random
+import time
+from typing import Any, Callable, Optional, Protocol
 
 import httpx
 
@@ -66,6 +68,14 @@ class NullNotifier:
 class DiscordNotifier:
     """Posts rich embeds to a Discord webhook."""
 
+    # Retry settings: ~7s worst-case total (1 + 2 + 4 + jitter). Cheap insurance
+    # against Discord's transient 5xx and 429 storms, never long enough to
+    # stall the 30s engine tick.
+    MAX_ATTEMPTS = 3
+    BACKOFF_BASE_S = 1.0
+    BACKOFF_MAX_S = 8.0
+    RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+
     def __init__(
         self,
         webhook_url: str,
@@ -73,6 +83,7 @@ class DiscordNotifier:
         username: str = "Harvest",
         timeout: float = 5.0,
         transport: Optional[httpx.BaseTransport] = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if not webhook_url:
             raise ValueError("DiscordNotifier requires a non-empty webhook_url")
@@ -82,6 +93,8 @@ class DiscordNotifier:
         if transport is not None:
             client_kwargs["transport"] = transport
         self._http = httpx.Client(**client_kwargs)
+        # Injectable for tests so we don't actually sleep during retry tests.
+        self._sleep = sleep
 
     def close(self) -> None:
         self._http.close()
@@ -111,17 +124,88 @@ class DiscordNotifier:
                 for f in fields[:25]
             ]
         payload = {"username": self.username, "embeds": [embed]}
-        try:
-            resp = self._http.post(self.webhook_url, json=payload)
+        return self._post_with_retry(payload)
+
+    def _post_with_retry(self, payload: dict[str, Any]) -> bool:
+        """POST with exponential backoff on transient failures.
+
+        Retries on: network exceptions, 5xx, and 429 (rate-limit — honors
+        Discord's `Retry-After` header when present).
+        Does NOT retry on: 4xx (client errors are our bug; retrying just spams).
+        """
+        last_status: Optional[int] = None
+        last_exc: Optional[Exception] = None
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            try:
+                resp = self._http.post(self.webhook_url, json=payload)
+            except Exception as exc:  # noqa: BLE001 — network/timeout
+                last_exc = exc
+                last_status = None
+                if attempt < self.MAX_ATTEMPTS:
+                    delay = self._backoff_delay(attempt)
+                    log.warning(
+                        "Discord notify network error (attempt %d/%d): %s — retrying in %.1fs",
+                        attempt, self.MAX_ATTEMPTS, exc, delay,
+                    )
+                    self._sleep(delay)
+                    continue
+                break
+
             if 200 <= resp.status_code < 300:
+                if attempt > 1:
+                    log.info(
+                        "Discord notify succeeded on attempt %d/%d",
+                        attempt, self.MAX_ATTEMPTS,
+                    )
                 return True
+
+            last_status = resp.status_code
+            if resp.status_code in self.RETRYABLE_STATUS and attempt < self.MAX_ATTEMPTS:
+                # Honor Retry-After (seconds) if Discord sent one (mostly on 429).
+                retry_after = self._parse_retry_after(resp)
+                delay = retry_after if retry_after is not None else self._backoff_delay(attempt)
+                log.warning(
+                    "Discord webhook returned %d (attempt %d/%d) — retrying in %.1fs",
+                    resp.status_code, attempt, self.MAX_ATTEMPTS, delay,
+                )
+                self._sleep(delay)
+                continue
+
+            # Non-retryable (4xx other than 429), or exhausted retries
             log.warning(
-                "Discord webhook returned %d: %s", resp.status_code, resp.text[:200]
+                "Discord webhook returned %d: %s",
+                resp.status_code, resp.text[:200],
             )
             return False
-        except Exception as exc:  # noqa: BLE001 — never block trading on notify failure
-            log.warning("Discord notify failed: %s", exc)
-            return False
+
+        if last_status is not None:
+            log.warning(
+                "Discord notify failed after %d attempts — last status %d",
+                self.MAX_ATTEMPTS, last_status,
+            )
+        elif last_exc is not None:
+            log.warning(
+                "Discord notify failed after %d attempts — %s",
+                self.MAX_ATTEMPTS, last_exc,
+            )
+        return False
+
+    def _backoff_delay(self, attempt: int) -> float:
+        """Exponential backoff with 0–25% jitter: 1s, 2s, 4s base (capped)."""
+        base = min(self.BACKOFF_BASE_S * (2 ** (attempt - 1)), self.BACKOFF_MAX_S)
+        return base * (1.0 + random.uniform(0.0, 0.25))
+
+    @staticmethod
+    def _parse_retry_after(resp: httpx.Response) -> Optional[float]:
+        """Parse `Retry-After` header. Discord sends seconds as a number.
+        Caps at BACKOFF_MAX_S so a runaway header doesn't stall the engine."""
+        raw = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+        if not raw:
+            return None
+        try:
+            return min(float(raw), DiscordNotifier.BACKOFF_MAX_S)
+        except (TypeError, ValueError):
+            return None
 
     def info(self, title: str, description: str = "", **kwargs: Any) -> bool:
         return self.send(title, description, color=COLOR_BLUE, **kwargs)
