@@ -81,8 +81,14 @@ class Config(BaseModel):
     max_long_leg_abs_spread: float = 0.05   # long-leg gate (absolute $)
     min_open_interest: int = 500
     vix_max: float = 30.0
-    ivr_min: float = 20.0
-    ivp_min: float = 30.0
+    # IV gate: a trade is allowed if IVR >= ivr_min OR IVP >= ivp_min.
+    # Loosened from 20/30 to 15/20 on 2026-05-10 — SPY at all-time-highs with
+    # VIX ~17 was getting gated out (IVR=4.9, IVP=7.3 on May 8) and we were
+    # left with only QQQ as a viable candidate. The looser threshold lets
+    # SPY participate during normal-but-not-elevated vol; expected credit
+    # per trade is ~10-15%% lower in exchange for 2-3x more setups.
+    ivr_min: float = 15.0
+    ivp_min: float = 20.0
     rsi_oversold: float = 10.0
     rsi_overbought: float = 90.0
     profit_target_pct: float = 0.50
