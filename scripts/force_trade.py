@@ -25,6 +25,8 @@ Optional flags:
     --max-credit-floor 0 (default 0.0 — accept any positive credit, bypass 33%)
     --expiration YYYY-MM-DD  override DTE band; pick this expiration directly
     --list-expirations   list all available expirations and exit (diagnostic)
+    --limit-price-override X  override the limit price (must be NEGATIVE for credits)
+                              e.g. --limit-price-override -0.13 to cross the spread.
     --dry-run-anyway     force dry-run regardless of ENGINE_MODE
     --yes                skip the interactive confirm prompt
 """
@@ -144,6 +146,9 @@ def main() -> int:
                         help="Override DTE band; use this expiration directly (YYYY-MM-DD)")
     parser.add_argument("--list-expirations", action="store_true",
                         help="List all available expirations for the symbol and exit")
+    parser.add_argument("--limit-price-override", type=float, default=None,
+                        help="Override limit price (must be negative for credit spreads, "
+                             "e.g. -0.13 to cross the spread for faster fill)")
     parser.add_argument("--dry-run-anyway", action="store_true",
                         help="Force dry-run regardless of ENGINE_MODE")
     parser.add_argument("--yes", action="store_true",
@@ -258,11 +263,23 @@ def main() -> int:
             return 0
 
     # 5. Submit via broker (preflight runs inside place_multi_leg_order)
+    # Apply limit price override if user passed --limit-price-override
+    if args.limit_price_override is not None:
+        if args.limit_price_override >= 0:
+            log.error("--limit-price-override must be NEGATIVE for credit spreads "
+                      "(Public.com convention). Got: %.2f", args.limit_price_override)
+            return 1
+        limit_price = f"{args.limit_price_override:.2f}"
+        print(f"  Using user-override limit price: {limit_price}  "
+              f"(natural would be {cand.limit_price_str()})")
+    else:
+        limit_price = cand.limit_price_str()
+
     order_id = str(uuid.uuid4())
     try:
         resp = public.place_multi_leg_order(
             legs=cand.legs,
-            limit_price=cand.limit_price_str(),
+            limit_price=limit_price,
             quantity=args.quantity,
             order_id=order_id,
             time_in_force="DAY",
