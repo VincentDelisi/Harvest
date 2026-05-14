@@ -299,3 +299,10 @@ def test_4xx_other_than_401_raises():
         client.get_account()
     assert exc.value.status == 400
     client.close()
+
+
+def test_instrument_accepts_multi_leg_instrument_type():
+    """Public.com returns instrument.type='MULTI_LEG_INSTRUMENT' on order status
+    responses for credit spreads. Must parse cleanly without validation error."""
+    inst = Instrument(symbol="SPY-MULTI-LEG-123", type="MULTI_LEG_INSTRUMENT")
+    assert inst.type == "MULTI_LEG_INSTRUMENT"

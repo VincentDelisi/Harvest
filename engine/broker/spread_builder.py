@@ -93,7 +93,11 @@ class SpreadCandidate:
     credit_to_width: float   # ratio
     legs: list[OrderLeg]
 
-    def limit_price_str(self) -> str:
+    def limit_price_str(
+        self,
+        aggression: Optional[float] = None,
+        max_giveup: Optional[float] = None,
+    ) -> str:
         """Limit price for the spread, formatted to 2 decimals.
 
         Public.com convention: for credit spreads (cash received by trader)
@@ -101,10 +105,28 @@ class SpreadCandidate:
         rejects positive limit prices with: 'Limit price must be negative for
         credit spreads.' (error code 104).
 
-        Our `net_credit` is stored as a positive float, so we negate here on
-        the way out to the broker.
+        Aggression model:
+          0.0 → mid-mid (best price, low fill rate)
+          1.0 → natural / take-the-bid (instant fill, worst price)
+          0.5 (default) → halfway between mid and natural
+
+        The 'natural' credit is what we'd collect hitting the bid on the short
+        and lifting the ask on the long:  natural = short_bid − long_ask.
+        That's always <= mid for a credit spread.
+
+        Give-up is capped at `max_giveup` cents off mid so wide-spread chains
+        (IWM far-OTM, deep weeklies) don't get hammered.
         """
-        return f"-{self.net_credit:.2f}"
+        agg = CONFIG.fill_aggression if aggression is None else aggression
+        cap = CONFIG.fill_max_giveup if max_giveup is None else max_giveup
+        agg = max(0.0, min(1.0, agg))
+
+        natural_credit = max(0.0, self.short_bid - self.long_ask)
+        # Distance from mid (self.net_credit) down to natural
+        span = max(0.0, self.net_credit - natural_credit)
+        giveup = min(span * agg, cap)
+        aggressive_credit = max(0.0, self.net_credit - giveup)
+        return f"-{aggressive_credit:.2f}"
 
 
 def _ok_short_liquidity(entry: OptionChainEntry) -> bool:

@@ -32,7 +32,12 @@ NumericStr = Annotated[Optional[str], BeforeValidator(_coerce_to_str)]
 
 # ───────────────────────── Enums (as Literal for ergonomics) ─────────────────
 
-InstrumentType = Literal["EQUITY", "OPTION", "INDEX_OPTION", "BOND", "CRYPTO"]
+# 'MULTI_LEG_INSTRUMENT' is what Public.com returns on OrderStatusResponse for
+# multi-leg orders (credit spreads, iron condors). Discovered when polling the
+# status of our first real spread order on 2026-05-14.
+InstrumentType = Literal[
+    "EQUITY", "OPTION", "INDEX_OPTION", "BOND", "CRYPTO", "MULTI_LEG_INSTRUMENT",
+]
 OrderSide = Literal["BUY", "SELL"]
 OptionType = Literal["CALL", "PUT"]
 OpenClose = Literal["OPEN", "CLOSE"]

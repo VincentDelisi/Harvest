@@ -105,5 +105,22 @@ class Config(BaseModel):
     dte_min: int = 2
     dte_max: int = 3
 
+    # Fill aggression for limit orders.
+    # 0.0 = mid (lowest fill rate, best price)
+    # 1.0 = natural / take-the-bid (instant fill, worst price)
+    # 0.5 = halfway between mid and natural — recommended for liquid SPY/QQQ
+    # Hard-capped at `fill_max_giveup` cents off mid regardless of aggression,
+    # so wide-spread chains (IWM far-OTM) don't get hammered. 0.05 default
+    # caps give-up at $5/contract per spread, which is a sane upper bound for
+    # 50-cent-bid-ask names.
+    #
+    # Set via env: FILL_AGGRESSION=0.5  FILL_MAX_GIVEUP=0.05
+    fill_aggression: float = Field(
+        default_factory=lambda: float(os.getenv("FILL_AGGRESSION", "0.5"))
+    )
+    fill_max_giveup: float = Field(
+        default_factory=lambda: float(os.getenv("FILL_MAX_GIVEUP", "0.05"))
+    )
+
 
 CONFIG = Config()

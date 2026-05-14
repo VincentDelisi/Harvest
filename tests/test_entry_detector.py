@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import httpx
@@ -37,7 +37,7 @@ def _bull_ctx_for(symbol: str = "SPY") -> UnderlyingContext:
         regime=RegimeSnapshot(
             symbol=symbol, regime=Regime.BULL,
             close=580.0, sma50=570.0, sma200=550.0,
-            as_of=pd.Timestamp("2026-05-07"),
+            as_of=pd.Timestamp("2026-05-11"),
         ),
         iv=IVStats(symbol=symbol, today_iv=18.0, ivr=25.0, ivp=40.0,
                    bootstrap=True, sample_size=252),
@@ -50,7 +50,7 @@ def _market_ctx(blackout=False, vix=15.0, iv_passed=True) -> MarketContext:
     u = _bull_ctx_for("SPY")
     u.iv_gate_passed = iv_passed
     return MarketContext(
-        as_of=datetime(2026, 5, 7, 10, 30, tzinfo=ET),
+        as_of=datetime(2026, 5, 11, 10, 30, tzinfo=ET),
         blackout_active=blackout,
         blackout_reason="FOMC" if blackout else None,
         vix_value=vix,
@@ -62,13 +62,13 @@ def _market_ctx(blackout=False, vix=15.0, iv_passed=True) -> MarketContext:
 def _rsi_low_bars() -> pd.DataFrame:
     """5-min bars with sharp recent dip → RSI(2) crashes below 10."""
     base = np.array([100.0] * 20 + [99.5, 99.0, 98.0, 96.0, 94.0])
-    idx = pd.date_range("2026-05-07 10:00", periods=len(base), freq="5min", tz=ET)
+    idx = pd.date_range("2026-05-11 10:00", periods=len(base), freq="5min", tz=ET)
     return pd.DataFrame({"close": base}, index=idx)
 
 
 def _rsi_neutral_bars() -> pd.DataFrame:
     base = np.linspace(99.0, 101.0, 25)
-    idx = pd.date_range("2026-05-07 10:00", periods=len(base), freq="5min", tz=ET)
+    idx = pd.date_range("2026-05-11 10:00", periods=len(base), freq="5min", tz=ET)
     return pd.DataFrame({"close": base}, index=idx)
 
 
@@ -96,7 +96,7 @@ def test_blocks_when_blackout_active(state):
     ed = EntryDetector(public, state, NullNotifier())
     decision = ed.check_underlying(
         "SPY", _rsi_low_bars(), _market_ctx(blackout=True),
-        account_equity=10_000, now_et=datetime(2026, 5, 7, 10, 30, tzinfo=ET),
+        account_equity=10_000, now_et=datetime(2026, 5, 11, 10, 30, tzinfo=ET),
     )
     assert decision.placed_order_id is None
     assert decision.triggered is False
@@ -109,11 +109,11 @@ def test_blocks_when_regime_mixed(state):
     ctx = _market_ctx()
     ctx.underlyings["SPY"].regime = RegimeSnapshot(
         symbol="SPY", regime=Regime.MIXED, close=580, sma50=570, sma200=575,
-        as_of=pd.Timestamp("2026-05-07"),
+        as_of=pd.Timestamp("2026-05-11"),
     )
     d = ed.check_underlying(
         "SPY", _rsi_low_bars(), ctx, 10_000,
-        datetime(2026, 5, 7, 10, 30, tzinfo=ET),
+        datetime(2026, 5, 11, 10, 30, tzinfo=ET),
     )
     assert d.placed_order_id is None
     assert d.blocked_reason == "regime MIXED"
@@ -124,7 +124,7 @@ def test_no_trigger_when_rsi_neutral(state):
     ed = EntryDetector(public, state, NullNotifier())
     d = ed.check_underlying(
         "SPY", _rsi_neutral_bars(), _market_ctx(), 10_000,
-        datetime(2026, 5, 7, 10, 30, tzinfo=ET),
+        datetime(2026, 5, 11, 10, 30, tzinfo=ET),
     )
     assert d.triggered is False
     assert d.placed_order_id is None
@@ -141,15 +141,15 @@ def test_full_path_places_order(state):
         if path.endswith("/option-expirations"):
             return httpx.Response(200, json={
                 "baseSymbol": "SPY",
-                "expirations": ["2026-05-09"],  # 2 DTE from 2026-05-07
+                "expirations": ["2026-05-13"],  # 2 DTE from 2026-05-11
             })
 
         if path.endswith("/option-chain"):
             puts = [
-                {"instrument": {"symbol": "SPY260509P00580000", "type": "OPTION"},
+                {"instrument": {"symbol": "SPY260513P00580000", "type": "OPTION"},
                  "outcome": "SUCCESS", "bid": "0.40", "ask": "0.41",
                  "openInterest": "1500", "delta": "-0.20", "strikePrice": "580.00"},
-                {"instrument": {"symbol": "SPY260509P00579000", "type": "OPTION"},
+                {"instrument": {"symbol": "SPY260513P00579000", "type": "OPTION"},
                  "outcome": "SUCCESS", "bid": "0.04", "ask": "0.05",
                  "openInterest": "1500", "delta": "-0.10", "strikePrice": "579.00"},
             ]
@@ -175,7 +175,7 @@ def test_full_path_places_order(state):
     d = ed.check_underlying(
         "SPY", _rsi_low_bars(), _market_ctx(),
         account_equity=10_000,
-        now_et=datetime(2026, 5, 7, 10, 30, tzinfo=ET),
+        now_et=datetime(2026, 5, 11, 10, 30, tzinfo=ET),
     )
     assert d.triggered is True
     assert d.candidate is not None
@@ -198,22 +198,22 @@ def test_concurrency_cap_per_underlying(state):
         state.insert_trade(TradeRecord(
             trade_id=tid, underlying="SPY", direction="PUT",
             short_strike=580, long_strike=579, width=1.0,
-            expiration="2026-05-09",
+            expiration="2026-05-13",
             short_symbol="X", long_symbol="Y",
             quantity=1, credit_received=0.40,
-            opened_at="2026-05-07T10:15:00-04:00", open_status="FILLED",
+            opened_at="2026-05-11T10:15:00-04:00", open_status="FILLED",
         ))
 
     def handler(req: httpx.Request) -> httpx.Response:
         path = req.url.path
         if path.endswith("/option-expirations"):
-            return httpx.Response(200, json={"baseSymbol": "SPY", "expirations": ["2026-05-09"]})
+            return httpx.Response(200, json={"baseSymbol": "SPY", "expirations": ["2026-05-13"]})
         if path.endswith("/option-chain"):
             return httpx.Response(200, json={"baseSymbol": "SPY", "calls": [], "puts": [
-                {"instrument": {"symbol": "SPY260509P00580000", "type": "OPTION"},
+                {"instrument": {"symbol": "SPY260513P00580000", "type": "OPTION"},
                  "outcome": "SUCCESS", "bid": "0.40", "ask": "0.41",
                  "openInterest": "1500", "delta": "-0.20", "strikePrice": "580.00"},
-                {"instrument": {"symbol": "SPY260509P00579000", "type": "OPTION"},
+                {"instrument": {"symbol": "SPY260513P00579000", "type": "OPTION"},
                  "outcome": "SUCCESS", "bid": "0.04", "ask": "0.05",
                  "openInterest": "1500", "delta": "-0.10", "strikePrice": "579.00"},
             ]})
@@ -228,7 +228,7 @@ def test_concurrency_cap_per_underlying(state):
     ed = EntryDetector(public, state, NullNotifier())
     d = ed.check_underlying(
         "SPY", _rsi_low_bars(), _market_ctx(), 10_000,
-        datetime(2026, 5, 7, 10, 30, tzinfo=ET),
+        datetime(2026, 5, 11, 10, 30, tzinfo=ET),
     )
     assert d.placed_order_id is None
     assert d.blocked_reason and "max_positions_per_underlying" in d.blocked_reason
@@ -238,6 +238,38 @@ def test_in_entry_window():
     public = _make_public_client(lambda r: httpx.Response(500))
     state_dummy = None  # not used in this method
     ed = EntryDetector(public, type("S", (), {"open_trades": lambda self: []})(), NullNotifier())
-    assert ed.in_entry_window(datetime(2026, 5, 7, 10, 30, tzinfo=ET)) is True
-    assert ed.in_entry_window(datetime(2026, 5, 7, 9, 59, tzinfo=ET)) is False
-    assert ed.in_entry_window(datetime(2026, 5, 7, 11, 31, tzinfo=ET)) is False
+    assert ed.in_entry_window(datetime(2026, 5, 11, 10, 30, tzinfo=ET)) is True
+    assert ed.in_entry_window(datetime(2026, 5, 11, 9, 59, tzinfo=ET)) is False
+    assert ed.in_entry_window(datetime(2026, 5, 11, 11, 31, tzinfo=ET)) is False
+
+
+# ─────────────────────── trading-day DTE helper ───────────────────────────
+
+def test_trading_dte_basic_weekday_pairs():
+    """Mon->Wed = 2, Tue->Thu = 2, Wed->Fri = 2 trading days."""
+    from engine.runtime.entry_detector import EntryDetector
+    # 2026-05-11 Mon, 2026-05-12 Tue, 2026-05-13 Wed, 2026-05-14 Thu, 2026-05-15 Fri
+    assert EntryDetector._trading_dte(date(2026, 5, 11), date(2026, 5, 13)) == 2
+    assert EntryDetector._trading_dte(date(2026, 5, 12), date(2026, 5, 14)) == 2
+    assert EntryDetector._trading_dte(date(2026, 5, 13), date(2026, 5, 15)) == 2
+
+
+def test_trading_dte_skips_weekend_thursday_case():
+    """Thursday -> Monday should be 2 trading days (not 4 calendar days).
+    This is the bug we fixed on 2026-05-14."""
+    from engine.runtime.entry_detector import EntryDetector
+    # Thursday 2026-05-14 -> Monday 2026-05-18
+    assert EntryDetector._trading_dte(date(2026, 5, 14), date(2026, 5, 18)) == 2
+
+
+def test_trading_dte_friday_to_monday_is_one():
+    """Fri -> Mon = 1 trading day (only Mon counts; weekend skipped)."""
+    from engine.runtime.entry_detector import EntryDetector
+    assert EntryDetector._trading_dte(date(2026, 5, 15), date(2026, 5, 18)) == 1
+
+
+def test_trading_dte_same_day_or_past_is_zero():
+    """Same day or already-expired returns 0."""
+    from engine.runtime.entry_detector import EntryDetector
+    assert EntryDetector._trading_dte(date(2026, 5, 14), date(2026, 5, 14)) == 0
+    assert EntryDetector._trading_dte(date(2026, 5, 14), date(2026, 5, 13)) == 0

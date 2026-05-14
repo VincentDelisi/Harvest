@@ -124,8 +124,39 @@ class EntryDetector:
 
     # ─────────────── DTE → expiration ───────────────────────────────────
 
+    @staticmethod
+    def _trading_dte(today: date, exp_date: date) -> int:
+        """Count weekdays (Mon-Fri) between today (exclusive) and expiration
+        (inclusive). Approximates trading days; ignores NYSE holidays which
+        is acceptable for a 2-3 DTE band because the only common holiday
+        that could land in-band is Good Friday and we'd still get a valid
+        Thu or Mon exp.
+
+        Examples (Mon=0 ... Fri=4, Sat=5, Sun=6):
+          Mon -> Wed:  2 trading days
+          Tue -> Thu:  2 trading days
+          Wed -> Fri:  2 trading days
+          Thu -> Mon:  2 trading days  (weekend skipped, was 4 calendar)
+          Fri -> Mon:  1 trading day   (was 3 calendar)
+          Fri -> Tue:  2 trading days  (was 4 calendar)
+        """
+        if exp_date <= today:
+            return 0
+        days = 0
+        cursor = today
+        while cursor < exp_date:
+            cursor = cursor + timedelta(days=1)
+            if cursor.weekday() < 5:  # Mon-Fri = 0-4
+                days += 1
+        return days
+
     def _pick_expiration(self, symbol: str, today_et: date) -> Optional[str]:
-        """Pick an expiration matching DTE band [dte_min, dte_max]."""
+        """Pick an expiration matching DTE band [dte_min, dte_max].
+
+        DTE is counted in TRADING DAYS, not calendar days. This avoids the
+        Thursday-dead-zone bug where the 2-3 calendar-day band fell on
+        weekends (Sat/Sun) and no expirations could ever be found.
+        """
         try:
             exp_resp = self.public.get_option_expirations(symbol)
         except PublicAPIError as exc:
@@ -136,11 +167,11 @@ class EntryDetector:
                 exp_date = date.fromisoformat(exp_str)
             except Exception:  # noqa: BLE001
                 continue
-            dte = (exp_date - today_et).days
+            dte = self._trading_dte(today_et, exp_date)
             if CONFIG.dte_min <= dte <= CONFIG.dte_max:
                 return exp_str
         log.info(
-            "No expirations in DTE band [%d,%d] for %s",
+            "No expirations in trading-day DTE band [%d,%d] for %s",
             CONFIG.dte_min, CONFIG.dte_max, symbol,
         )
         return None

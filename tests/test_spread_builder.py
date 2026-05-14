@@ -292,8 +292,48 @@ def test_limit_price_str_is_negative_for_credit_spread():
     report = build_credit_spread_adaptive(chain, "SPY", "PUT", "2026-05-08")
     cand = report.candidate
     assert cand is not None
-    s = cand.limit_price_str()
+    # aggression=0 → pure mid, magnitude equals net_credit
+    s = cand.limit_price_str(aggression=0.0)
     assert s.startswith("-"), f"expected negative limit price, got {s!r}"
     assert float(s) < 0, f"expected float < 0, got {s!r}"
-    # Magnitude should equal the net_credit
     assert abs(float(s) + cand.net_credit) < 1e-9
+
+
+def test_limit_price_str_aggression_lowers_credit():
+    """aggression=1.0 should drop the limit to the natural credit (capped by
+    max_giveup). The magnitude should be <= mid (i.e. less credit collected)."""
+    chain = OptionChainResponse(
+        baseSymbol="SPY", calls=[],
+        puts=[
+            _put(580, bid="0.40", ask="0.41", oi="1500", delta="-0.20"),
+            _put(579, bid="0.04", ask="0.05", oi="1500", delta="-0.10"),
+        ],
+    )
+    report = build_credit_spread_adaptive(chain, "SPY", "PUT", "2026-05-08")
+    cand = report.candidate
+    assert cand is not None
+    mid_s = cand.limit_price_str(aggression=0.0)
+    aggro_s = cand.limit_price_str(aggression=1.0, max_giveup=1.0)  # uncapped
+    # Aggressive limit should be a smaller (less-negative) credit
+    assert abs(float(aggro_s)) <= abs(float(mid_s)), (
+        f"aggression should lower credit. mid={mid_s} aggro={aggro_s}"
+    )
+
+
+def test_limit_price_str_max_giveup_caps_aggression():
+    """max_giveup=0.01 should cap the give-up at $0.01 even at aggression=1.0."""
+    chain = OptionChainResponse(
+        baseSymbol="SPY", calls=[],
+        puts=[
+            _put(580, bid="0.40", ask="0.41", oi="1500", delta="-0.20"),
+            _put(579, bid="0.04", ask="0.05", oi="1500", delta="-0.10"),
+        ],
+    )
+    report = build_credit_spread_adaptive(chain, "SPY", "PUT", "2026-05-08")
+    cand = report.candidate
+    assert cand is not None
+    capped_s = cand.limit_price_str(aggression=1.0, max_giveup=0.01)
+    # Capped credit should be at least net_credit - 0.01
+    assert abs(float(capped_s)) >= cand.net_credit - 0.011, (
+        f"max_giveup cap not respected. net={cand.net_credit} capped={capped_s}"
+    )

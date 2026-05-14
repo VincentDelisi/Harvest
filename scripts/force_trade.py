@@ -35,7 +35,7 @@ from __future__ import annotations
 import argparse
 import sys
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import pytz
@@ -56,10 +56,25 @@ ET = pytz.timezone("America/New_York")
 WIDTHS_TO_TRY = (1.0, 2.0, 3.0, 5.0)
 
 
+def _trading_dte(today: date, exp_date: date) -> int:
+    """Trading days (Mon-Fri) between today (exclusive) and expiration (inclusive).
+    Mirrors EntryDetector._trading_dte so manual force_trade picks the same
+    expiration the engine would."""
+    if exp_date <= today:
+        return 0
+    days = 0
+    cursor = today
+    while cursor < exp_date:
+        cursor = cursor + timedelta(days=1)
+        if cursor.weekday() < 5:
+            days += 1
+    return days
+
+
 def _pick_expiration_no_gate(
     public: PublicClient, symbol: str, today: date
 ) -> Optional[str]:
-    """Find an expiration in the DTE band [dte_min, dte_max]."""
+    """Find an expiration in the DTE band [dte_min, dte_max] (trading days)."""
     exp_resp = public.get_option_expirations(symbol)
     candidates = []
     for exp_str in exp_resp.expirations:
@@ -67,7 +82,7 @@ def _pick_expiration_no_gate(
             exp_date = date.fromisoformat(exp_str)
         except Exception:  # noqa: BLE001
             continue
-        dte = (exp_date - today).days
+        dte = _trading_dte(today, exp_date)
         if CONFIG.dte_min <= dte <= CONFIG.dte_max:
             candidates.append((dte, exp_str))
     if not candidates:
@@ -77,22 +92,25 @@ def _pick_expiration_no_gate(
 
 
 def _print_all_expirations(public: PublicClient, symbol: str, today: date) -> None:
-    """Diagnostic: print every available expiration with DTE."""
+    """Diagnostic: print every available expiration with both calendar DTE
+    and trading DTE. Helps the operator understand why expirations are
+    accepted or rejected by the band."""
     exp_resp = public.get_option_expirations(symbol)
-    print(f"  Available {symbol} expirations:")
+    print(f"  Available {symbol} expirations (calendar / trading DTE):")
     rows = []
     for exp_str in exp_resp.expirations:
         try:
             exp_date = date.fromisoformat(exp_str)
-            dte = (exp_date - today).days
-            in_band = CONFIG.dte_min <= dte <= CONFIG.dte_max
-            rows.append((dte, exp_str, in_band))
+            cal_dte = (exp_date - today).days
+            trd_dte = _trading_dte(today, exp_date)
+            in_band = CONFIG.dte_min <= trd_dte <= CONFIG.dte_max
+            rows.append((trd_dte, cal_dte, exp_str, in_band))
         except Exception:  # noqa: BLE001
             continue
     rows.sort()
-    for dte, exp_str, in_band in rows[:15]:
+    for trd_dte, cal_dte, exp_str, in_band in rows[:15]:
         flag = "  <-- in DTE band" if in_band else ""
-        print(f"    {exp_str}  DTE={dte}{flag}")
+        print(f"    {exp_str}  cal={cal_dte:3d}  trd={trd_dte:3d}{flag}")
 
 
 def _build_relaxed(
@@ -195,9 +213,11 @@ def main() -> int:
             log.error("Invalid --expiration value '%s' (expected YYYY-MM-DD)",
                       args.expiration)
             return 1
-        dte = (exp_date - today).days
+        cal_dte = (exp_date - today).days
+        trd_dte = _trading_dte(today, exp_date)
         exp = args.expiration
-        print(f"  Using user-override expiration: {exp}  (DTE={dte}, "
+        print(f"  Using user-override expiration: {exp}  "
+              f"(calendar DTE={cal_dte}, trading DTE={trd_dte}, "
               f"band [{CONFIG.dte_min},{CONFIG.dte_max}] bypassed)")
     else:
         try:
