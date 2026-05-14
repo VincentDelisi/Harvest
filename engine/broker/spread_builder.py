@@ -95,8 +95,16 @@ class SpreadCandidate:
 
     def limit_price_str(self) -> str:
         """Limit price for the spread, formatted to 2 decimals.
-        Sold for net credit, so we represent as the spread's mid-mid value."""
-        return f"{self.net_credit:.2f}"
+
+        Public.com convention: for credit spreads (cash received by trader)
+        the API expects the limit price as a NEGATIVE number. Their preflight
+        rejects positive limit prices with: 'Limit price must be negative for
+        credit spreads.' (error code 104).
+
+        Our `net_credit` is stored as a positive float, so we negate here on
+        the way out to the broker.
+        """
+        return f"-{self.net_credit:.2f}"
 
 
 def _ok_short_liquidity(entry: OptionChainEntry) -> bool:

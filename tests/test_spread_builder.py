@@ -276,3 +276,24 @@ def test_adaptive_empty_widths_returns_empty_report():
     assert report.candidate is None
     assert report.selected_width is None
     assert report.per_width == []
+
+
+def test_limit_price_str_is_negative_for_credit_spread():
+    """Public.com API requires credit spread limit prices to be negative.
+    Their preflight rejects positive limits with code 104:
+    'Limit price must be negative for credit spreads.'"""
+    chain = OptionChainResponse(
+        baseSymbol="SPY", calls=[],
+        puts=[
+            _put(580, bid="0.40", ask="0.41", oi="1500", delta="-0.20"),
+            _put(579, bid="0.04", ask="0.05", oi="1500", delta="-0.10"),
+        ],
+    )
+    report = build_credit_spread_adaptive(chain, "SPY", "PUT", "2026-05-08")
+    cand = report.candidate
+    assert cand is not None
+    s = cand.limit_price_str()
+    assert s.startswith("-"), f"expected negative limit price, got {s!r}"
+    assert float(s) < 0, f"expected float < 0, got {s!r}"
+    # Magnitude should equal the net_credit
+    assert abs(float(s) + cand.net_credit) < 1e-9
