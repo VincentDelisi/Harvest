@@ -23,6 +23,8 @@ Optional flags:
     --width 1.0          (default 1.0 — script auto-tries 1→2→3→5 if needed)
     --quantity 1         (default 1 — keep this at 1 for the validation trade)
     --max-credit-floor 0 (default 0.0 — accept any positive credit, bypass 33%)
+    --expiration YYYY-MM-DD  override DTE band; pick this expiration directly
+    --list-expirations   list all available expirations and exit (diagnostic)
     --dry-run-anyway     force dry-run regardless of ENGINE_MODE
     --yes                skip the interactive confirm prompt
 """
@@ -72,6 +74,25 @@ def _pick_expiration_no_gate(
     return candidates[0][1]
 
 
+def _print_all_expirations(public: PublicClient, symbol: str, today: date) -> None:
+    """Diagnostic: print every available expiration with DTE."""
+    exp_resp = public.get_option_expirations(symbol)
+    print(f"  Available {symbol} expirations:")
+    rows = []
+    for exp_str in exp_resp.expirations:
+        try:
+            exp_date = date.fromisoformat(exp_str)
+            dte = (exp_date - today).days
+            in_band = CONFIG.dte_min <= dte <= CONFIG.dte_max
+            rows.append((dte, exp_str, in_band))
+        except Exception:  # noqa: BLE001
+            continue
+    rows.sort()
+    for dte, exp_str, in_band in rows[:15]:
+        flag = "  <-- in DTE band" if in_band else ""
+        print(f"    {exp_str}  DTE={dte}{flag}")
+
+
 def _build_relaxed(
     chain, symbol: str, direction: str, expiration: str,
     starting_width: float, min_credit_floor: float,
@@ -119,6 +140,10 @@ def main() -> int:
                         help="Number of contracts (keep at 1 for validation)")
     parser.add_argument("--min-credit-floor", type=float, default=0.0,
                         help="Min credit/width ratio. 0.0 = accept any positive credit.")
+    parser.add_argument("--expiration", type=str, default=None,
+                        help="Override DTE band; use this expiration directly (YYYY-MM-DD)")
+    parser.add_argument("--list-expirations", action="store_true",
+                        help="List all available expirations for the symbol and exit")
     parser.add_argument("--dry-run-anyway", action="store_true",
                         help="Force dry-run regardless of ENGINE_MODE")
     parser.add_argument("--yes", action="store_true",
@@ -148,17 +173,44 @@ def main() -> int:
     notify = build_notifier()
     state = StateStore()
 
-    # 1. Pick expiration in DTE band
-    try:
-        exp = _pick_expiration_no_gate(public, args.symbol, today)
-    except PublicAPIError as exc:
-        log.error("Failed to fetch expirations: %s", exc)
-        return 1
-    if exp is None:
-        log.error("No expirations in DTE band [%d,%d] for %s",
-                  CONFIG.dte_min, CONFIG.dte_max, args.symbol)
-        return 1
-    print(f"  Picked expiration: {exp}  (DTE in [{CONFIG.dte_min},{CONFIG.dte_max}])")
+    # 0. List-expirations diagnostic short-circuit
+    if args.list_expirations:
+        try:
+            _print_all_expirations(public, args.symbol, today)
+        except PublicAPIError as exc:
+            log.error("Failed to fetch expirations: %s", exc)
+            return 1
+        return 0
+
+    # 1. Pick expiration — either user-override or DTE band
+    if args.expiration:
+        try:
+            exp_date = date.fromisoformat(args.expiration)
+        except ValueError:
+            log.error("Invalid --expiration value '%s' (expected YYYY-MM-DD)",
+                      args.expiration)
+            return 1
+        dte = (exp_date - today).days
+        exp = args.expiration
+        print(f"  Using user-override expiration: {exp}  (DTE={dte}, "
+              f"band [{CONFIG.dte_min},{CONFIG.dte_max}] bypassed)")
+    else:
+        try:
+            exp = _pick_expiration_no_gate(public, args.symbol, today)
+        except PublicAPIError as exc:
+            log.error("Failed to fetch expirations: %s", exc)
+            return 1
+        if exp is None:
+            log.error("No expirations in DTE band [%d,%d] for %s",
+                      CONFIG.dte_min, CONFIG.dte_max, args.symbol)
+            log.error("Hint: use --list-expirations to see what's available, "
+                      "or --expiration YYYY-MM-DD to override.")
+            try:
+                _print_all_expirations(public, args.symbol, today)
+            except PublicAPIError:
+                pass
+            return 1
+        print(f"  Picked expiration: {exp}  (DTE in [{CONFIG.dte_min},{CONFIG.dte_max}])")
 
     # 2. Fetch chain
     try:
